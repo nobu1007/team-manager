@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理者承認画面</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous"></script>
+  <style>
+    body {
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      margin: 0;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      padding: 30px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+    
+    h1 {
+      color: #333;
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .admin-login {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    
+    .admin-login input {
+      padding: 12px;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      width: 200px;
+    }
+    
+    .admin-login button {
+      padding: 12px 24px;
+      background: #ff6b35;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    
+    .admin-login button:hover {
+      background: #e55a2b;
+    }
+    
+    .pending-users {
+      margin-top: 30px;
+    }
+    
+    .user-card {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .user-info {
+      flex: 1;
+    }
+    
+    .user-info h3 {
+      margin: 0 0 5px 0;
+      color: #333;
+    }
+    
+    .user-info p {
+      margin: 5px 0;
+      color: #666;
+    }
+    
+    .user-actions {
+      display: flex;
+      gap: 10px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    
+    .btn-approve {
+      background: #28a745;
+      color: white;
+    }
+    
+    .btn-approve:hover {
+      background: #218838;
+    }
+    
+    .btn-reject {
+      background: #dc3545;
+      color: white;
+    }
+    
+    .btn-reject:hover {
+      background: #c82333;
+    }
+    
+    .status {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: bold;
+    }
+    
+    .status-pending {
+      background: #fff3cd;
+      color: #856404;
+    }
+    
+    .status-approved {
+      background: #d4edda;
+      color: #155724;
+    }
+    
+    .status-rejected {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    
+    .message {
+      padding: 10px;
+      border-radius: 6px;
+      margin: 10px 0;
+    }
+    
+    .message-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .message-error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>管理者承認画面</h1>
+    
+    <div id="admin-login" class="admin-login">
+      <h2>管理者ログイン</h2>
+      <input type="email" id="admin-email" placeholder="管理者メールアドレス">
+      <input type="password" id="admin-password" placeholder="パスワード">
+      <button onclick="adminLogin()">ログイン</button>
+    </div>
+    
+    <div id="admin-panel" style="display: none;">
+      <h2>承認待ちユーザー</h2>
+      <div id="pending-users" class="pending-users">
+        <p>読み込み中...</p>
+      </div>
+    </div>
+    
+    <div id="message"></div>
+  </div>
+
+  <script type="module">
+    import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabase-config.js';
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    
+    let currentAdmin = null;
+    
+    // 管理者ログイン
+    async function adminLogin() {
+      const email = document.getElementById('admin-email').value;
+      const password = document.getElementById('admin-password').value;
+      
+      if (!email || !password) {
+        showMessage('メールアドレスとパスワードを入力してください。', 'error');
+        return;
+      }
+      
+      try {
+        const { data, error } = await sb.auth.signInWithPassword({
+          email: email,
+          password: password
+        });
+        
+        if (error) {
+          showMessage('ログインに失敗しました: ' + error.message, 'error');
+          return;
+        }
+        
+        // 管理者権限をチェック
+        const { data: profile, error: profileError } = await sb
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user.id)
+          .single();
+        
+        if (profileError || !profile.is_admin) {
+          showMessage('管理者権限がありません。', 'error');
+          await sb.auth.signOut();
+          return;
+        }
+        
+        currentAdmin = data.user;
+        showMessage('管理者としてログインしました。', 'success');
+        
+        document.getElementById('admin-login').style.display = 'none';
+        document.getElementById('admin-panel').style.display = 'block';
+        
+        loadPendingUsers();
+        
+      } catch (error) {
+        showMessage('ログインエラー: ' + error.message, 'error');
+      }
+    }
+    
+    // 承認待ちユーザーを読み込み
+    async function loadPendingUsers() {
+      try {
+        const { data: users, error } = await sb
+          .from('profiles')
+          .select('id, email, approved, created_at')
+          .eq('approved', false)
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('ユーザー取得エラー:', error);
+          showMessage('ユーザー情報の取得に失敗しました。', 'error');
+          return;
+        }
+        
+        displayUsers(users || []);
+        
+      } catch (error) {
+        console.error('ユーザー読み込みエラー:', error);
+        showMessage('ユーザー情報の読み込みに失敗しました。', 'error');
+      }
+    }
+    
+    // ユーザー一覧を表示
+    function displayUsers(users) {
+      const container = document.getElementById('pending-users');
+      
+      if (!users || users.length === 0) {
+        container.innerHTML = '<p>承認待ちのユーザーはいません。</p>';
+        return;
+      }
+      
+      container.innerHTML = users.map(user => {
+        return `
+          <div class="user-card">
+            <div class="user-info">
+              <h3>${user.email}</h3>
+              <p>ユーザーID: ${user.id}</p>
+              <span class="status status-pending">承認待ち</span>
+            </div>
+            <div class="user-actions">
+              <button class="btn btn-approve" onclick="approveUser('${user.id}')">承認</button>
+              <button class="btn btn-reject" onclick="rejectUser('${user.id}')">却下</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+    
+    // ユーザーを承認
+    async function approveUser(userId) {
+      try {
+        const { error } = await sb
+          .from('profiles')
+          .update({ approved: true })
+          .eq('id', userId);
+        
+        if (error) {
+          showMessage('承認に失敗しました: ' + error.message, 'error');
+          return;
+        }
+        
+        showMessage('ユーザーを承認しました。', 'success');
+        loadPendingUsers(); // リストを更新
+        
+      } catch (error) {
+        showMessage('承認エラー: ' + error.message, 'error');
+      }
+    }
+    
+    // ユーザーを却下
+    async function rejectUser(userId) {
+      if (!confirm('このユーザーを却下しますか？')) {
+        return;
+      }
+      
+      try {
+        const { error } = await sb
+          .from('profiles')
+          .update({ approved: false })
+          .eq('id', userId);
+        
+        if (error) {
+          showMessage('却下に失敗しました: ' + error.message, 'error');
+          return;
+        }
+        
+        showMessage('ユーザーを却下しました。', 'success');
+        loadPendingUsers(); // リストを更新
+        
+      } catch (error) {
+        showMessage('却下エラー: ' + error.message, 'error');
+      }
+    }
+    
+    // メッセージ表示
+    function showMessage(message, type) {
+      const messageDiv = document.getElementById('message');
+      messageDiv.textContent = message;
+      messageDiv.className = `message message-${type}`;
+      
+      setTimeout(() => {
+        messageDiv.textContent = '';
+        messageDiv.className = '';
+      }, 5000);
+    }
+    
+    // ページ読み込み時の処理
+    window.addEventListener('load', async () => {
+      const { data: { session } } = await sb.auth.getSession();
+      
+      if (session) {
+        const { data: profile, error: profileError } = await sb
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+        
+        if (!profileError && profile.is_admin) {
+          currentAdmin = session.user;
+          document.getElementById('admin-login').style.display = 'none';
+          document.getElementById('admin-panel').style.display = 'block';
+          loadPendingUsers();
+        }
+      }
+    });
+    
+    // グローバル公開（onclickから呼べるように）
+    window.adminLogin = adminLogin;
+    window.approveUser = approveUser;
+    window.rejectUser = rejectUser;
+  </script>
+</body>
+</html>
+
+
+
+
+
+

@@ -3,33 +3,390 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Team Manager</title>
+  <title>Team Manager | 相模原市救助隊員資格取得研修</title>
   <link rel="stylesheet" href="./styles.css">
+  <style>
+    .auth-shell {
+      min-height: calc(100vh - 180px);
+      display: grid;
+      place-items: center;
+      padding: 24px 0 40px;
+    }
+    .auth-shell-inner {
+      width: min(420px, 100%);
+      display: grid;
+      gap: 16px;
+    }
+    .auth-shell h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      text-align: center;
+    }
+    .auth-shell p.muted {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .table-scroll table {
+      min-width: 520px;
+    }
+    @media (max-width: 640px) {
+      .app-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .toolbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .auth-shell {
+        min-height: auto;
+        padding-top: 12px;
+      }
+    }
+  </style>
+  <!-- Supabase（認証用） -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">メインコンテンツへ移動</a>
+  <a class="skip-link" href="#main-content">メインコンテンツへ移動</a>
 
   <header class="app-header">
     <div class="brand">
-      <span class="title">Team Manager</span>
+      <span class="title">相模原市救助隊研修 Team Manager</span>
     </div>
     <nav class="app-nav">
       <a href="#" aria-current="page">Home</a>
+      <button id="adminAccessBtn" class="secondary" style="display:none">管理者画面</button>
+      <button id="logoutBtn" class="secondary" style="display:none">ログアウト</button>
     </nav>
   </header>
 
-  <main id="main" class="app-main">
-    <section class="card">
-      <h3>デプロイ準備完了</h3>
-      <p>この画面が表示されていれば、ローカル/本番どちらでも表示の土台はOKです。</p>
+	<main id="main-content" class="app-main">
+    <section id="auth-view" class="auth-shell" aria-label="認証エリア">
+      <div class="auth-shell-inner">
+        <div>
+          <h1>Team Managerへログイン</h1>
+          <p class="muted">承認済みアカウントのみ利用できます。ログイン後にダッシュボードが表示されます。</p>
+        </div>
+
+        <section id="auth-card" class="card">
+          <h3>ログイン</h3>
+          <form id="login-form">
+            <label for="email">メールアドレス</label>
+            <input id="email" type="email" required placeholder="you@example.com" autocomplete="email">
+            <label for="password">パスワード</label>
+            <input id="password" type="password" required placeholder="••••••••" autocomplete="current-password">
+            <div class="actions">
+              <button id="loginBtn" type="submit">ログイン</button>
+            </div>
+          </form>
+          <div id="auth-message" class="muted"></div>
+          <div class="actions" style="justify-content:flex-start">
+            <button id="show-signup" type="button" class="secondary">新規登録へ</button>
+            <button id="reset-password" type="button" class="secondary">パスワード再設定</button>
+          </div>
+        </section>
+
+        <section id="signup-card" class="card" style="display:none">
+          <h3>新規登録</h3>
+          <p class="muted">メールとパスワードでアカウントを作成します。管理者の承認後に利用できます。</p>
+          <form id="signup-form">
+            <label for="signup-email">メールアドレス</label>
+            <input id="signup-email" type="email" required placeholder="you@example.com" autocomplete="email">
+            <label for="signup-password">パスワード</label>
+            <input id="signup-password" type="password" required placeholder="8文字以上を推奨" autocomplete="new-password">
+            <div class="actions">
+              <button id="signupBtn" type="submit">新規登録</button>
+              <button id="back-login" type="button" class="secondary">ログイン画面に戻る</button>
+            </div>
+          </form>
+          <div id="signup-message" class="muted"></div>
+        </section>
+        
+        <section id="reset-card" class="card" style="display:none">
+          <h3>パスワード再設定</h3>
+          <p class="muted">メールのリンクから戻りました。新しいパスワードを設定してください。</p>
+          <form id="reset-form">
+            <label for="new-password">新しいパスワード</label>
+            <input id="new-password" type="password" required autocomplete="new-password" placeholder="8文字以上を推奨">
+            <label for="confirm-password">新しいパスワード（確認）</label>
+            <input id="confirm-password" type="password" required autocomplete="new-password" placeholder="同じパスワードを再入力">
+            <div class="actions">
+              <button id="resetSubmit" type="submit">パスワードを設定</button>
+              <button id="reset-cancel" type="button" class="secondary">キャンセル</button>
+            </div>
+          </form>
+          <div id="reset-message" class="muted"></div>
+        </section>
+      </div>
     </section>
-  </main>
+    <section id="admin-panel" class="admin-panel" aria-label="管理者設定" hidden>
+      <div class="card admin-panel-head">
+        <div>
+          <p class="eyebrow">助教専用</p>
+          <h3>管理者メニュー</h3>
+        </div>
+        <div class="actions">
+          <button id="adminCloseBtn" type="button" class="secondary">閉じる</button>
+        </div>
+      </div>
+      <div class="grid admin-grid">
+        <article class="card">
+          <h3>業務連絡の登録</h3>
+          <form id="notice-form" class="inline-form" aria-label="業務連絡の追加">
+            <label for="notice-title">件名</label>
+            <input id="notice-title" type="text" placeholder="例: 明日の集合時間変更" required>
+            <label for="notice-detail">詳細</label>
+            <textarea id="notice-detail" placeholder="具体的な内容を記入してください" required></textarea>
+            <div class="row">
+              <div>
+                <label for="notice-target">対象</label>
+                <input id="notice-target" type="text" placeholder="例: 全班 / 第2班">
+              </div>
+              <div>
+                <label for="notice-deadline">期限・時間</label>
+                <input id="notice-deadline" type="text" placeholder="例: 本日17:00">
+              </div>
+            </div>
+            <div class="actions" style="justify-content:flex-start">
+              <button type="submit">連絡を追加</button>
+            </div>
+          </form>
+          <h4 class="subheading">登録済み</h4>
+          <ul class="list admin-list" id="admin-notice-list"></ul>
+        </article>
+
+        <article class="card">
+          <h3>メンバー情報の登録</h3>
+          <form id="member-form" aria-label="メンバー情報の追加">
+            <label for="member-name">氏名</label>
+            <input id="member-name" type="text" placeholder="例: 第1班 田中" required>
+            <label for="member-role">役割 / 資格</label>
+            <input id="member-role" type="text" placeholder="例: ロープ班 / メディック" required>
+            <label for="member-team">班</label>
+            <select id="member-team" required>
+              <option value="" disabled selected>選択してください</option>
+              <option value="第1班">第1班</option>
+              <option value="第2班">第2班</option>
+            </select>
+            <label for="member-affiliation">所属</label>
+            <input id="member-affiliation" type="text" placeholder="例: 相模原市消防局 第1班" required>
+            <label for="member-contact">連絡先</label>
+            <input id="member-contact" type="text" placeholder="例: Teams, 携帯電話" required>
+            <label for="member-age">年齢</label>
+            <input id="member-age" type="number" min="18" max="70" placeholder="例: 32">
+            <label for="member-photo-file">顔写真</label>
+            <input id="member-photo-file" type="file" accept="image/*">
+            <p class="muted" style="margin:0 0 8px">スマホやPCから選択した画像はSupabaseにアップロードされます。</p>
+            <label for="member-motivation">意気込み</label>
+            <textarea id="member-motivation" placeholder="例: 全員で完走できるようにサポートします。"></textarea>
+            <div class="actions" style="justify-content:flex-start">
+              <button type="submit" id="member-submit-btn">メンバーを追加</button>
+              <button type="button" class="secondary" id="member-cancel-btn" style="display:none">編集をキャンセル</button>
+            </div>
+            <p id="member-form-status" class="muted" style="display:none"></p>
+          </form>
+          <h4 class="subheading">登録済み</h4>
+          <ul class="list admin-list" id="admin-member-list"></ul>
+        </article>
+
+        <article class="card">
+          <h3>参考資料の登録</h3>
+          <form id="resource-form" aria-label="参考資料の追加">
+            <label for="resource-title">資料名</label>
+            <input id="resource-title" type="text" placeholder="例: 溺水救助チェックリスト" required>
+            <label for="resource-meta">概要</label>
+            <input id="resource-meta" type="text" placeholder="例: PDF / 更新日">
+            <label for="resource-link">リンク</label>
+            <input id="resource-link" type="url" placeholder="https://example.com/manual.pdf">
+            <div class="actions" style="justify-content:flex-start">
+              <button type="submit">資料を追加</button>
+            </div>
+          </form>
+          <h4 class="subheading">登録済み</h4>
+          <ul class="list admin-list" id="admin-resource-list"></ul>
+        </article>
+
+        <article class="card">
+          <h3>講師Q&Aの登録</h3>
+          <form id="qa-form">
+            <label for="qa-name">投稿者</label>
+            <input id="qa-name" type="text" placeholder="例: 第2班 鈴木">
+            <label for="qa-topic">カテゴリ</label>
+            <select id="qa-topic">
+              <option value="schedule">予定・集合</option>
+              <option value="equipment">資機材</option>
+              <option value="procedure">救助要領</option>
+              <option value="safety">安全管理</option>
+              <option value="other">その他</option>
+            </select>
+            <label for="qa-question">質問内容</label>
+            <textarea id="qa-question" placeholder="例: 屋外訓練時の装備確認ポイントを教えてください。" required></textarea>
+            <div class="actions" style="justify-content:flex-start">
+              <button type="submit">質問を登録</button>
+            </div>
+          </form>
+        </article>
+
+        <article class="card slider-admin-card">
+          <h3>スライダー管理</h3>
+          <form id="slider-form" aria-label="スライダーの追加">
+            <label for="slider-tag">区分</label>
+            <select id="slider-tag">
+              <option value="共有">共有</option>
+              <option value="注意">注意</option>
+              <option value="警戒">警戒</option>
+            </select>
+            <label for="slider-layout">レイアウト</label>
+            <select id="slider-layout">
+              <option value="text">テキストのみ</option>
+              <option value="mixed">写真 + テキスト</option>
+              <option value="image">写真のみ</option>
+            </select>
+            <label for="slider-title">タイトル</label>
+            <input id="slider-title" type="text" placeholder="例: 雨天対応の変更">
+            <label for="slider-body">本文</label>
+            <textarea id="slider-body" placeholder="例: 午後の屋外訓練は屋内シナリオに切り替えます。"></textarea>
+            <label for="slider-media">画像URL</label>
+            <input id="slider-media" type="url" placeholder="https://example.com/photo.jpg">
+            <label for="slider-alt">画像説明</label>
+            <input id="slider-alt" type="text" placeholder="例: 屋外訓練の様子">
+            <div class="actions" style="justify-content:flex-start">
+              <button type="submit">スライドを追加</button>
+            </div>
+          </form>
+          <h4 class="subheading">現在の表示内容</h4>
+          <ul class="list slider-admin-list" id="slider-admin-list"></ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="app-home" class="stack" style="display:none">
+      <div class="top-slider" aria-live="polite">
+        <div class="slider-viewport">
+          <div class="slider-track" id="announcement-track"></div>
+        </div>
+        <button id="sliderPrev" class="slider-btn prev" type="button" aria-label="前の更新情報へ">‹</button>
+        <button id="sliderNext" class="slider-btn next" type="button" aria-label="次の更新情報へ">›</button>
+        <div class="slider-dots" id="sliderDots"></div>
+      </div>
+
+      <section class="grid board-grid" aria-label="業務連絡と予定表">
+        <article class="card notice-card" aria-label="業務連絡">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">共有事項</p>
+              <h3>業務連絡</h3>
+            </div>
+          </div>
+          <ul class="list notice-list" id="notice-list" aria-live="polite"></ul>
+        </article>
+
+        <article class="card schedule-card" aria-label="予定表">
+          <p class="eyebrow">当日スケジュール</p>
+          <h3>訓練予定表</h3>
+          <div class="table-scroll">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th scope="col">日付</th>
+                  <th scope="col">時間</th>
+                  <th scope="col">内容</th>
+                  <th scope="col">担当</th>
+                </tr>
+              </thead>
+              <tbody id="schedule-body"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="grid board-grid" aria-label="メンバー情報と参考資料">
+        <article class="card member-card">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">受講者データ</p>
+              <h3>メンバー情報</h3>
+              <p class="muted" id="member-count-caption"></p>
+            </div>
+            <a class="badge" href="./member-profile.html">詳細プロフィールへ</a>
+          </div>
+          <div class="table-scroll" role="region" aria-label="メンバー情報一覧">
+            <table class="table" id="member-table">
+              <thead>
+                <tr>
+                  <th scope="col">氏名</th>
+                  <th scope="col">役割</th>
+                  <th scope="col">班・所属</th>
+                  <th scope="col">連絡手段</th>
+                  <th scope="col">プロフィール</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card resources-card">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">参考資料</p>
+              <h3>教材・手順書</h3>
+            </div>
+          </div>
+          <ul class="list resource-list" id="resource-list" aria-live="polite"></ul>
+        </article>
+      </section>
+
+      <section class="grid board-grid" aria-label="講師Q&A">
+        <article class="card qa-card">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">質問共有</p>
+              <h3>講師へのQ&A</h3>
+            </div>
+          </div>
+          <h4 class="subheading">最近の質問</h4>
+          <ul class="list qa-log" id="qa-log" aria-live="polite"></ul>
+        </article>
+      </section>
+    </section>
+	</main>
 
   <footer class="app-footer">
-    <small>© 2025 Team Manager</small>
+    <small>© 2025 相模原市救助隊員資格取得研修 Team Manager</small>
   </footer>
 
-  <script src="./app.js"></script>
+  <!-- 承認待ちオーバーレイ -->
+  <div id="auth-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+    <div class="card" style="max-width:360px; background:var(--surface); border:1px solid var(--border);">
+      <h3>承認待ち</h3>
+      <p id="overlay-text" class="muted">アカウントは承認待ちです。承認され次第、自動で利用可能になります。</p>
+    </div>
+  </div>
+
+  <div id="app-toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="admin-modal" class="admin-modal" role="dialog" aria-modal="true">
+    <div class="card admin-modal-card">
+      <h3>管理者アクセス</h3>
+      <p class="muted">許可された助教のみコードを入力してください。</p>
+      <form id="admin-access-form">
+        <label for="admin-code">アクセスコード</label>
+        <input id="admin-code" type="password" autocomplete="off" required>
+        <div class="actions">
+          <button type="submit">入室</button>
+          <button type="button" class="secondary" id="adminModalClose">キャンセル</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+	<script type="module" src="./app.js"></script>
 </body>
 </html>
 
