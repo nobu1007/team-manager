@@ -1,24 +1,4 @@
 (() => {
-  var __defProp = Object.defineProperty;
-  var __defProps = Object.defineProperties;
-  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
-  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
-  var __hasOwnProp = Object.prototype.hasOwnProperty;
-  var __propIsEnum = Object.prototype.propertyIsEnumerable;
-  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-  var __spreadValues = (a, b) => {
-    for (var prop in b || (b = {}))
-      if (__hasOwnProp.call(b, prop))
-        __defNormalProp(a, prop, b[prop]);
-    if (__getOwnPropSymbols)
-      for (var prop of __getOwnPropSymbols(b)) {
-        if (__propIsEnum.call(b, prop))
-          __defNormalProp(a, prop, b[prop]);
-      }
-    return a;
-  };
-  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
-
   // supabase-config.js
   var SUPABASE_URL = "https://hnyypwbkpqqudilypjvg.supabase.co";
   var SUPABASE_ANON_KEY = "sb_publishable_CmxTssKUX0noaayRQSTGRg_TzetlAQR";
@@ -75,7 +55,7 @@
     }
   ];
   function getDefaultMembers() {
-    return DEFAULT_MEMBER_PROFILES.map((member) => __spreadValues({}, member));
+    return DEFAULT_MEMBER_PROFILES.map((member) => ({ ...member }));
   }
 
   // app.js
@@ -268,13 +248,339 @@
   var sliderIndex = 0;
   var sliderTimer = null;
   var toastTimer = null;
+  var sliderStatusTimer = null;
   var adminUnlocked = false;
   var MEMBERS_TABLE = "members";
+  var ANNOUNCEMENTS_TABLE = "announcements";
+  var MEMBER_NOTES_TABLE = "member_insights";
   var MEMBER_PHOTO_BUCKET = "member-photos";
+  var SLIDER_MEDIA_BUCKET = "slider-media";
+  var SUPABASE_BUCKET_IDS = [MEMBER_PHOTO_BUCKET, SLIDER_MEDIA_BUCKET];
   var membersSyncInFlight = null;
+  var announcementsSyncInFlight = null;
+  var memberNotesSyncInFlight = null;
   var editingMemberId = null;
+  var currentSession = null;
+  var currentUserProfile = null;
+  var supabaseMonitor = {
+    initialized: false,
+    storageVisible: false,
+    storageDirty: true,
+    elements: {},
+    state: {
+      status: "pending",
+      message: "Supabase\u306E\u521D\u671F\u5316\u3092\u5F85\u6A5F\u3057\u3066\u3044\u307E\u3059...",
+      memberCount: null,
+      storageTotal: null,
+      storageSummary: [],
+      lastSyncedAt: null,
+      lastError: null
+    }
+  };
+  var memberNotesState = {
+    entries: {},
+    selectedMemberId: "",
+    lastSyncedAt: null
+  };
+  function getSupabaseProjectDisplayUrl() {
+    if (!SUPABASE_URL) return "\u672A\u8A2D\u5B9A";
+    if (typeof URL === "function") {
+      try {
+        const parsed = new URL(SUPABASE_URL);
+        return parsed.origin;
+      } catch (_) {
+        return SUPABASE_URL;
+      }
+    }
+    return SUPABASE_URL;
+  }
+  function setupSupabaseMonitorUI() {
+    if (supabaseMonitor.initialized) return;
+    const statusEl = $("supabase-connection-status");
+    if (!statusEl) return;
+    supabaseMonitor.elements = {
+      status: statusEl,
+      memberCount: $("supabase-member-count"),
+      storageCount: $("supabase-storage-count"),
+      lastSync: $("supabase-last-sync"),
+      refreshBtn: $("supabase-refresh-btn"),
+      storageBtn: $("supabase-storage-refresh-btn"),
+      projectUrl: $("supabase-project-url"),
+      storageSection: $("supabase-storage-section"),
+      storageList: $("supabase-storage-list"),
+      storageEmpty: $("supabase-storage-empty")
+    };
+    if (supabaseMonitor.elements.projectUrl) {
+      supabaseMonitor.elements.projectUrl.textContent = getSupabaseProjectDisplayUrl();
+    }
+    if (supabaseMonitor.elements.refreshBtn) {
+      supabaseMonitor.elements.refreshBtn.addEventListener("click", () => {
+        const includeStorage = supabaseMonitor.storageVisible;
+        refreshSupabaseMonitor({ includeStorage });
+      });
+    }
+    if (supabaseMonitor.elements.storageBtn) {
+      supabaseMonitor.elements.storageBtn.addEventListener("click", async () => {
+        supabaseMonitor.storageVisible = !supabaseMonitor.storageVisible;
+        updateSupabaseMonitorUI();
+        if (supabaseMonitor.storageVisible && supabaseMonitor.storageDirty) {
+          await refreshSupabaseMonitor({ includeStorage: true, silent: true });
+        }
+      });
+    }
+    supabaseMonitor.initialized = true;
+    updateSupabaseMonitorUI();
+    if (!supabase) {
+      updateSupabaseMonitorLocalFallback();
+    }
+  }
+  function updateSupabaseMonitorUI() {
+    if (!supabaseMonitor.initialized) return;
+    const { elements, state } = supabaseMonitor;
+    if (elements.status) {
+      elements.status.textContent = state.message;
+    }
+    if (elements.memberCount) {
+      elements.memberCount.textContent = Number.isFinite(state.memberCount) ? `${state.memberCount}\u4EF6` : state.status === "local" && Array.isArray(appData == null ? void 0 : appData.members) ? `${appData.members.length}\u4EF6` : "\u2015";
+    }
+    if (elements.storageCount) {
+      elements.storageCount.textContent = Number.isFinite(state.storageTotal) ? `${state.storageTotal}\u4EF6` : "\u2015";
+    }
+    if (elements.lastSync) {
+      if (state.lastSyncedAt) {
+        elements.lastSync.textContent = formatSupabaseMonitorDate(state.lastSyncedAt);
+      } else if (state.status === "local") {
+        elements.lastSync.textContent = "\u30ED\u30FC\u30AB\u30EB\u4FDD\u5B58\u4E2D";
+      } else {
+        elements.lastSync.textContent = "\u672A\u540C\u671F";
+      }
+    }
+    if (elements.storageBtn) {
+      elements.storageBtn.textContent = supabaseMonitor.storageVisible ? "Storage\u3092\u96A0\u3059" : "Storage\u3092\u8868\u793A";
+    }
+    if (elements.storageSection) {
+      elements.storageSection.style.display = supabaseMonitor.storageVisible ? "block" : "none";
+    }
+    renderSupabaseStorageList();
+  }
+  function renderSupabaseStorageList() {
+    if (!supabaseMonitor.initialized) return;
+    const { storageList, storageEmpty } = supabaseMonitor.elements;
+    if (!storageList) return;
+    storageList.innerHTML = "";
+    const summary = supabaseMonitor.state.storageSummary;
+    if (!Array.isArray(summary) || summary.length === 0) {
+      if (storageEmpty) {
+        storageEmpty.style.display = "";
+      }
+      return;
+    }
+    if (storageEmpty) {
+      storageEmpty.style.display = "none";
+    }
+    summary.forEach((bucketInfo) => {
+      var _a;
+      const item = document.createElement("li");
+      item.className = "supabase-storage-item";
+      const head = document.createElement("div");
+      head.className = "supabase-storage-item-head";
+      const labelEl = document.createElement("span");
+      labelEl.textContent = bucketInfo.bucket;
+      const countEl = document.createElement("span");
+      countEl.className = "supabase-storage-meta";
+      countEl.textContent = Number.isFinite(bucketInfo.total) ? `${bucketInfo.total}\u4EF6` : "\u2015";
+      head.appendChild(labelEl);
+      head.appendChild(countEl);
+      item.appendChild(head);
+      if (bucketInfo.error) {
+        const errorMsg = document.createElement("p");
+        errorMsg.className = "supabase-storage-error";
+        errorMsg.textContent = bucketInfo.error;
+        item.appendChild(errorMsg);
+      } else if ((_a = bucketInfo.files) == null ? void 0 : _a.length) {
+        const filesList = document.createElement("ul");
+        filesList.className = "supabase-storage-files";
+        bucketInfo.files.forEach((file) => {
+          const row = document.createElement("li");
+          row.className = "supabase-storage-file";
+          const nameEl = document.createElement("code");
+          nameEl.textContent = file.name;
+          const metaEl = document.createElement("span");
+          metaEl.className = "supabase-storage-meta";
+          const parts = [];
+          if (file.updatedAt) {
+            parts.push(formatSupabaseMonitorDate(file.updatedAt));
+          }
+          if (Number.isFinite(file.size)) {
+            parts.push(formatSupabaseFileSize(file.size));
+          }
+          metaEl.textContent = parts.join(" / ") || "\u2015";
+          row.appendChild(nameEl);
+          row.appendChild(metaEl);
+          filesList.appendChild(row);
+        });
+        item.appendChild(filesList);
+      } else {
+        const emptyRow = document.createElement("p");
+        emptyRow.className = "supabase-storage-meta";
+        emptyRow.textContent = "\u30D5\u30A1\u30A4\u30EB\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002";
+        item.appendChild(emptyRow);
+      }
+      storageList.appendChild(item);
+    });
+  }
+  function formatSupabaseMonitorDate(input) {
+    if (!input) return "";
+    const date = input instanceof Date ? input : new Date(input);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      if (typeof Intl !== "undefined" && Intl.DateTimeFormat) {
+        return new Intl.DateTimeFormat("ja-JP", { dateStyle: "short", timeStyle: "short" }).format(date);
+      }
+    } catch (_) {
+    }
+    return date.toLocaleString("ja-JP");
+  }
+  function formatSupabaseFileSize(bytes) {
+    if (!Number.isFinite(bytes)) return "";
+    if (bytes >= 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+    }
+    if (bytes >= 1024) {
+      return `${Math.round(bytes / 1024)}KB`;
+    }
+    return `${bytes}B`;
+  }
+  async function refreshSupabaseMonitor(options = {}) {
+    const { includeStorage = false, silent = false } = options;
+    if (!supabaseMonitor.initialized) return;
+    if (!supabase) {
+      updateSupabaseMonitorLocalFallback();
+      if (!silent) {
+        showToast("Supabase\u304C\u672A\u8A2D\u5B9A\u306E\u305F\u3081\u30ED\u30FC\u30AB\u30EB\u4FDD\u5B58\u30E2\u30FC\u30C9\u3067\u52D5\u4F5C\u3057\u3066\u3044\u307E\u3059\u3002", "error");
+      }
+      return;
+    }
+    supabaseMonitor.state.status = "loading";
+    supabaseMonitor.state.message = "Supabase\u3068\u540C\u671F\u4E2D...";
+    updateSupabaseMonitorUI();
+    try {
+      const { count } = await supabase.from(MEMBERS_TABLE).select("id", { head: true, count: "exact" });
+      if (typeof count === "number") {
+        supabaseMonitor.state.memberCount = count;
+      }
+      if (includeStorage) {
+        const summary = await Promise.all(SUPABASE_BUCKET_IDS.map((bucketId) => listBucketObjects(bucketId)));
+        supabaseMonitor.state.storageSummary = summary;
+        supabaseMonitor.state.storageTotal = summary.reduce((acc, bucket) => {
+          return acc + (Number.isFinite(bucket.total) ? bucket.total : 0);
+        }, 0);
+        supabaseMonitor.storageDirty = false;
+      }
+      supabaseMonitor.state.status = "connected";
+      supabaseMonitor.state.message = "Supabase\u3068\u63A5\u7D9A\u6E08\u307F";
+      supabaseMonitor.state.lastError = null;
+      supabaseMonitor.state.lastSyncedAt = /* @__PURE__ */ new Date();
+      updateSupabaseMonitorUI();
+      if (!silent) {
+        showToast("Supabase\u306E\u72B6\u614B\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002", "success");
+      }
+    } catch (err) {
+      supabaseMonitor.state.status = "error";
+      supabaseMonitor.state.message = "Supabase\u306E\u540C\u671F\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+      supabaseMonitor.state.lastError = (err == null ? void 0 : err.message) || String(err);
+      if (includeStorage) {
+        supabaseMonitor.state.storageSummary = [];
+        supabaseMonitor.state.storageTotal = null;
+      }
+      updateSupabaseMonitorUI();
+      if (!silent) {
+        showToast("Supabase\u306E\u72B6\u614B\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+      }
+    }
+  }
+  async function listBucketObjects(bucketId) {
+    const summary = { bucket: bucketId, files: [], total: 0, error: null };
+    try {
+      const { data, error } = await supabase.storage.from(bucketId).list("", {
+        limit: 50,
+        sortBy: { column: "updated_at", order: "desc" }
+      });
+      if (error) {
+        throw error;
+      }
+      const files = Array.isArray(data) ? data.filter((entry) => entry && typeof entry.name === "string" && !entry.name.endsWith("/")).map((entry) => {
+        var _a, _b, _c, _d, _e, _f, _g;
+        const rawSize = (_g = (_e = (_c = (_a = entry == null ? void 0 : entry.metadata) == null ? void 0 : _a.size) != null ? _c : (_b = entry == null ? void 0 : entry.metadata) == null ? void 0 : _b.Size) != null ? _e : (_d = entry == null ? void 0 : entry.metadata) == null ? void 0 : _d.length) != null ? _g : (_f = entry == null ? void 0 : entry.metadata) == null ? void 0 : _f.ContentLength;
+        const sizeNumber = typeof rawSize === "number" ? rawSize : Number(rawSize);
+        return {
+          name: entry.name,
+          updatedAt: entry.updated_at ? new Date(entry.updated_at) : entry.created_at ? new Date(entry.created_at) : null,
+          size: Number.isFinite(sizeNumber) ? sizeNumber : null
+        };
+      }) : [];
+      summary.total = files.length;
+      summary.files = files.slice(0, 10);
+    } catch (err) {
+      summary.error = (err == null ? void 0 : err.message) || "\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+    }
+    return summary;
+  }
+  function markSupabaseStorageDirty() {
+    supabaseMonitor.storageDirty = true;
+    if (supabaseMonitor.initialized && supabaseMonitor.storageVisible && supabase) {
+      refreshSupabaseMonitor({ includeStorage: true, silent: true });
+    }
+  }
+  function updateSupabaseMonitorLocalFallback() {
+    if (!supabaseMonitor.initialized) return;
+    supabaseMonitor.state.status = "local";
+    supabaseMonitor.state.message = "\u73FE\u5728\u306F\u30ED\u30FC\u30AB\u30EB\u4FDD\u5B58\u30E2\u30FC\u30C9\uFF08localStorage\uFF09\u3067\u52D5\u4F5C\u3057\u3066\u3044\u307E\u3059\u3002";
+    supabaseMonitor.state.memberCount = Array.isArray(appData == null ? void 0 : appData.members) ? appData.members.length : null;
+    supabaseMonitor.state.storageSummary = [];
+    supabaseMonitor.state.storageTotal = null;
+    supabaseMonitor.state.lastSyncedAt = null;
+    supabaseMonitor.state.lastError = null;
+    updateSupabaseMonitorUI();
+  }
   function $(id) {
     return document.getElementById(id);
+  }
+  function escapeHTML(value) {
+    if (value === null || value === void 0) {
+      return "";
+    }
+    return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function formatMultilineText(value) {
+    if (!value)
+      return "";
+    return escapeHTML(value).replace(/\n/g, "<br>");
+  }
+  function isCurrentUserAdmin() {
+    var _a;
+    return Boolean((_a = currentUserProfile == null ? void 0 : currentUserProfile.isAdmin) != null ? _a : false);
+  }
+  function clearMemberNotesForm() {
+    var _a, _b;
+    const select = $("memberNotesSelect");
+    if (select) {
+      select.value = "";
+    }
+    (_a = $("memberTraitsField")) == null ? void 0 : _a.value = "";
+    (_b = $("memberCautionsField")) == null ? void 0 : _b.value = "";
+  }
+  function isMemberNotesPanelVisible() {
+    const panel = $("member-notes-panel");
+    return panel ? panel.classList.contains("show") : false;
+  }
+  function resetMemberNotesState() {
+    memberNotesState.entries = {};
+    memberNotesState.selectedMemberId = "";
+    memberNotesState.lastSyncedAt = null;
+    clearMemberNotesForm();
+    renderMemberNotesPreview("");
+    updateMemberNotesStatus("");
   }
   function stopApprovalPolling() {
     if (approvalPollTimer) {
@@ -306,14 +612,16 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         const defaults = cloneDefaultState();
-        return __spreadProps(__spreadValues(__spreadValues({}, defaults), parsed), {
+        return {
+          ...defaults,
+          ...parsed,
           announcements: Array.isArray(parsed == null ? void 0 : parsed.announcements) ? parsed.announcements : defaults.announcements,
           notices: Array.isArray(parsed == null ? void 0 : parsed.notices) ? parsed.notices : defaults.notices,
           schedule: Array.isArray(parsed == null ? void 0 : parsed.schedule) ? parsed.schedule : defaults.schedule,
           members: Array.isArray(parsed == null ? void 0 : parsed.members) ? parsed.members : defaults.members,
           resources: Array.isArray(parsed == null ? void 0 : parsed.resources) ? parsed.resources : defaults.resources,
           qaLog: Array.isArray(parsed == null ? void 0 : parsed.qaLog) ? parsed.qaLog : defaults.qaLog
-        });
+        };
       }
     } catch (err) {
       console.warn("\u30A2\u30D7\u30EA\u30C7\u30FC\u30BF\u306E\u8AAD\u307F\u8FBC\u307F\u306B\u5931\u6557\u3057\u307E\u3057\u305F:", err);
@@ -335,6 +643,28 @@
     } catch (_) {
     }
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+  function resolveSubmitButton(event, fallbackSelector) {
+    if ((event == null ? void 0 : event.submitter) instanceof HTMLButtonElement) {
+      return event.submitter;
+    }
+    const active = document.activeElement;
+    if (active instanceof HTMLButtonElement && (event == null ? void 0 : event.target) && active.form === event.target) {
+      return active;
+    }
+    if (fallbackSelector) {
+      const fallback = typeof fallbackSelector === "string" ? document.querySelector(fallbackSelector) : fallbackSelector;
+      if (fallback instanceof HTMLButtonElement) {
+        return fallback;
+      }
+    }
+    if ((event == null ? void 0 : event.target) instanceof HTMLFormElement) {
+      const defaultBtn = event.target.querySelector('button[type="submit"]');
+      if (defaultBtn instanceof HTMLButtonElement) {
+        return defaultBtn;
+      }
+    }
+    return null;
   }
   function ensureArrayState(key) {
     if (!appData) return;
@@ -369,6 +699,21 @@
       photoAlt: record.photoAlt || record.photo_alt || `${record.name || "\u30E1\u30F3\u30D0\u30FC"}\u306E\u30D7\u30ED\u30D5\u30A3\u30FC\u30EB\u5199\u771F`
     };
   }
+  function normalizeAnnouncementRecord(record) {
+    if (!record || typeof record !== "object") return null;
+    const hasMedia = Boolean(record.media_url || record.mediaUrl);
+    const layout = normalizeSlideLayout(record.layout, hasMedia);
+    return {
+      id: record.id || record.announcement_id || record.uuid || createId("ann"),
+      tag: record.tag || "\u5171\u6709",
+      title: record.title || "",
+      body: record.body || "",
+      layout,
+      mediaUrl: record.media_url || record.mediaUrl || "",
+      mediaAlt: record.media_alt || record.mediaAlt || (hasMedia ? record.title || "\u95A2\u9023\u753B\u50CF" : ""),
+      createdAt: record.created_at || record.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
   async function refreshMembersFromSupabase(options = {}) {
     if (!supabase) return false;
     if (membersSyncInFlight) {
@@ -386,6 +731,13 @@
         saveAppData(appData);
         renderMemberTable();
         renderAdminMembers();
+        if (supabaseMonitor.initialized) {
+          supabaseMonitor.state.memberCount = normalized.length;
+          supabaseMonitor.state.status = "connected";
+          supabaseMonitor.state.message = "Supabase\u3068\u63A5\u7D9A\u6E08\u307F";
+          supabaseMonitor.state.lastSyncedAt = /* @__PURE__ */ new Date();
+          updateSupabaseMonitorUI();
+        }
         if (editingMemberId) {
           const editingMember = normalized.find((member) => member.id === editingMemberId);
           if (editingMember) {
@@ -395,18 +747,103 @@
             exitMemberEditMode({ silent: true });
           }
         }
+        if (isMemberNotesPanelVisible()) {
+          populateMemberNotesSelect(memberNotesState.selectedMemberId);
+        }
         return true;
       } catch (err) {
         if (!options.silent) {
           showToast("\u30E1\u30F3\u30D0\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
         }
         console.warn("Failed to fetch members from Supabase:", err);
+        if (supabaseMonitor.initialized) {
+          supabaseMonitor.state.status = "error";
+          supabaseMonitor.state.message = "\u30E1\u30F3\u30D0\u30FC\u540C\u671F\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002";
+          supabaseMonitor.state.lastError = (err == null ? void 0 : err.message) || String(err);
+          updateSupabaseMonitorUI();
+        }
         return false;
       } finally {
         membersSyncInFlight = null;
       }
     })();
     return membersSyncInFlight;
+  }
+  async function refreshMemberNotesFromSupabase(options = {}) {
+    if (!supabase || !isCurrentUserAdmin())
+      return false;
+    if (memberNotesSyncInFlight) {
+      return memberNotesSyncInFlight;
+    }
+    memberNotesSyncInFlight = (async () => {
+      try {
+        const { data, error } = await supabase.from(MEMBER_NOTES_TABLE).select("member_id, traits, cautions, updated_at, updated_by_email").order("updated_at", { ascending: false });
+        if (error) {
+          throw error;
+        }
+        const nextEntries = {};
+        (data || []).forEach((row) => {
+          if (!(row != null && row.member_id))
+            return;
+          nextEntries[row.member_id] = {
+            traits: row.traits || "",
+            cautions: row.cautions || "",
+            updatedAt: row.updated_at || null,
+            updatedByEmail: row.updated_by_email || ""
+          };
+        });
+        memberNotesState.entries = nextEntries;
+        memberNotesState.lastSyncedAt = new Date();
+        const selectedId = memberNotesState.selectedMemberId;
+        if (selectedId && memberNotesState.entries[selectedId]) {
+          fillMemberNotesFieldsFromState(selectedId);
+        }
+        if (isMemberNotesPanelVisible()) {
+          populateMemberNotesSelect(selectedId);
+        }
+        return true;
+      } catch (err) {
+        if (!(options != null && options.silent)) {
+          showToast("\u30E1\u30F3\u30D0\u30FC\u7279\u6027\u30E1\u30E2\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+        }
+        console.warn("Failed to fetch member notes from Supabase:", err);
+        return false;
+      } finally {
+        memberNotesSyncInFlight = null;
+      }
+    })();
+    return memberNotesSyncInFlight;
+  }
+  async function refreshAnnouncementsFromSupabase(options = {}) {
+    if (!supabase) return false;
+    if (announcementsSyncInFlight) {
+      return announcementsSyncInFlight;
+    }
+    announcementsSyncInFlight = (async () => {
+      try {
+        const { data, error } = await supabase.from(ANNOUNCEMENTS_TABLE).select("id, tag, title, body, layout, media_url, media_alt, created_at").order("created_at", { ascending: false });
+        if (error) {
+          throw error;
+        }
+        const normalized = Array.isArray(data) ? data.map((row) => normalizeAnnouncementRecord(row)).filter(Boolean) : [];
+        ensureArrayState("announcements");
+        appData.announcements = normalized;
+        saveAppData(appData);
+        renderAnnouncements();
+        renderSliderAdminList();
+        startSliderAutoPlay();
+        return true;
+      } catch (err) {
+        if (!options.silent) {
+          showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u60C5\u5831\u306E\u53D6\u5F97\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+        }
+        console.warn("Failed to fetch announcements from Supabase:", err);
+        return false;
+      } finally {
+        announcementsSyncInFlight = null;
+      }
+    })();
+    return announcementsSyncInFlight;
   }
   async function insertMemberToSupabase(member) {
     if (!supabase) return null;
@@ -425,9 +862,30 @@
     if (error) throw error;
     return normalizeMemberRecord(data);
   }
+  async function insertAnnouncementToSupabase(slide) {
+    if (!supabase) return null;
+    const payload = {
+      tag: slide.tag || "\u5171\u6709",
+      title: slide.title || null,
+      body: slide.body || null,
+      layout: slide.layout || "text",
+      media_url: slide.mediaUrl || null,
+      media_alt: slide.mediaAlt || null
+    };
+    const { data, error } = await supabase.from(ANNOUNCEMENTS_TABLE).insert(payload).select("id, tag, title, body, layout, media_url, media_alt, created_at").single();
+    if (error) throw error;
+    return normalizeAnnouncementRecord(data);
+  }
   async function deleteMemberFromSupabase(id) {
     if (!supabase || !id) return;
     const { error } = await supabase.from(MEMBERS_TABLE).delete().eq("id", id);
+    if (error) {
+      throw error;
+    }
+  }
+  async function deleteAnnouncementFromSupabase(id) {
+    if (!supabase || !id) return;
+    const { error } = await supabase.from(ANNOUNCEMENTS_TABLE).delete().eq("id", id);
     if (error) {
       throw error;
     }
@@ -449,6 +907,23 @@
     if (error) throw error;
     return normalizeMemberRecord(data);
   }
+  async function upsertMemberNotesToSupabase(memberId, values) {
+    var _a, _b;
+    if (!supabase || !memberId)
+      return null;
+    const payload = {
+      member_id: memberId,
+      traits: values.traits || null,
+      cautions: values.cautions || null,
+      updated_by: ((_a = currentSession == null ? void 0 : currentSession.user) == null ? void 0 : _a.id) || null,
+      updated_by_email: ((_b = currentSession == null ? void 0 : currentSession.user) == null ? void 0 : _b.email) || null
+    };
+    const { data, error } = await supabase.from(MEMBER_NOTES_TABLE).upsert(payload, { onConflict: "member_id" }).select("member_id").single();
+    if (error) {
+      throw error;
+    }
+    return data;
+  }
   function sanitizeFileName(name = "") {
     if (!name) return `member-photo-${Date.now()}`;
     return name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
@@ -468,20 +943,38 @@
         throw uploadError;
       }
       const { data } = supabase.storage.from(MEMBER_PHOTO_BUCKET).getPublicUrl(objectName, { download: false });
-      return (data == null ? void 0 : data.publicUrl) || "";
+      const publicUrl = (data == null ? void 0 : data.publicUrl) || "";
+      markSupabaseStorageDirty();
+      return publicUrl;
     } catch (err) {
       console.warn("Failed to upload member photo:", err);
       showToast("\u9854\u5199\u771F\u306E\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
       throw err;
     }
   }
-  function fileToDataUrl(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error || new Error("failed to read file"));
-      reader.readAsDataURL(file);
-    });
+  async function uploadSliderMedia(file) {
+    if (!supabase || !file) return "";
+    try {
+      const fileName = sanitizeFileName(file.name || "slide.jpg");
+      const ext = fileName.includes(".") ? fileName.split(".").pop() : "jpg";
+      const objectName = `slider/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from(SLIDER_MEDIA_BUCKET).upload(objectName, file, {
+        cacheControl: "1800",
+        upsert: false,
+        contentType: file.type || "image/jpeg"
+      });
+      if (uploadError) {
+        throw uploadError;
+      }
+      const { data } = supabase.storage.from(SLIDER_MEDIA_BUCKET).getPublicUrl(objectName, { download: false });
+      const publicUrl = (data == null ? void 0 : data.publicUrl) || "";
+      markSupabaseStorageDirty();
+      return publicUrl;
+    } catch (err) {
+      console.warn("Failed to upload slider media:", err);
+      showToast("\u30B9\u30E9\u30A4\u30C9\u753B\u50CF\u306E\u30A2\u30C3\u30D7\u30ED\u30FC\u30C9\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+      throw err;
+    }
   }
   function buildSlideMessage(slide) {
     const parts = [];
@@ -523,9 +1016,211 @@
       ${messageBlock || '<div class="slide-message"><p>\u5185\u5BB9\u672A\u8A2D\u5B9A</p></div>'}
     </div>`;
   }
+  function setMemberNotesFormDisabled(disabled) {
+    ["memberNotesSelect", "memberTraitsField", "memberCautionsField", "memberNotesSaveBtn"].forEach((id) => {
+      const el = $(id);
+      if (el) {
+        el.disabled = disabled;
+      }
+    });
+  }
+  function toggleMemberNotesButton(visible) {
+    const btn = $("memberNotesBtn");
+    if (!btn)
+      return;
+    btn.style.display = visible ? "" : "none";
+    if (!visible) {
+      closeMemberNotesPanel();
+    }
+  }
+  function openMemberNotesPanel() {
+    const panel = $("member-notes-panel");
+    if (!panel)
+      return;
+    panel.classList.add("show");
+    panel.removeAttribute("hidden");
+    populateMemberNotesSelect(memberNotesState.selectedMemberId);
+    const select = $("memberNotesSelect");
+    if (select) {
+      select.focus();
+    }
+  }
+  function closeMemberNotesPanel() {
+    const panel = $("member-notes-panel");
+    if (!panel)
+      return;
+    panel.classList.remove("show");
+    panel.setAttribute("hidden", "hidden");
+  }
+  function populateMemberNotesSelect(preferredId = "") {
+    const select = $("memberNotesSelect");
+    if (!select)
+      return;
+    const members = Array.isArray(appData == null ? void 0 : appData.members) ? appData.members : [];
+    if (!members.length) {
+      select.innerHTML = '<option value="">\u767B\u9332\u6E08\u307F\u30E1\u30F3\u30D0\u30FC\u304C\u3042\u308A\u307E\u305B\u3093</option>';
+      setMemberNotesFormDisabled(true);
+      clearMemberNotesForm();
+      renderMemberNotesPreview("");
+      updateMemberNotesStatus("");
+      return;
+    }
+    setMemberNotesFormDisabled(false);
+    const options = ['<option value="">\u30E1\u30F3\u30D0\u30FC\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044</option>'];
+    members.forEach((member) => {
+      const label = member.team ? `[${member.team}] ${member.name}` : member.name;
+      options.push(`<option value="${member.id}">${escapeHTML(label)}</option>`);
+    });
+    select.innerHTML = options.join("");
+    let resolvedId = preferredId || memberNotesState.selectedMemberId || members[0].id;
+    if (!members.some((member) => member.id === resolvedId)) {
+      resolvedId = "";
+    }
+    if (resolvedId) {
+      select.value = resolvedId;
+      memberNotesState.selectedMemberId = resolvedId;
+      fillMemberNotesFieldsFromState(resolvedId);
+    } else {
+      select.value = "";
+      memberNotesState.selectedMemberId = "";
+      clearMemberNotesForm();
+      renderMemberNotesPreview("");
+      updateMemberNotesStatus("");
+    }
+  }
+  function fillMemberNotesFieldsFromState(memberId) {
+    const notes = memberNotesState.entries[memberId] || { traits: "", cautions: "" };
+    const traitsField = $("memberTraitsField");
+    const cautionsField = $("memberCautionsField");
+    if (traitsField) {
+      traitsField.value = notes.traits || "";
+    }
+    if (cautionsField) {
+      cautionsField.value = notes.cautions || "";
+    }
+    updateMemberNotesStatus(memberId);
+    renderMemberNotesPreview(memberId);
+  }
+  function handleMemberNotesSelectChange() {
+    const select = $("memberNotesSelect");
+    if (!select)
+      return;
+    const memberId = select.value;
+    memberNotesState.selectedMemberId = memberId;
+    if (memberId) {
+      fillMemberNotesFieldsFromState(memberId);
+    } else {
+      clearMemberNotesForm();
+      renderMemberNotesPreview("");
+      updateMemberNotesStatus("");
+    }
+  }
+  function updateMemberNotesStatus(memberId) {
+    const statusEl = $("memberNotesStatus");
+    if (!statusEl)
+      return;
+    if (!memberId) {
+      statusEl.textContent = "\u5BFE\u8C61\u30E1\u30F3\u30D0\u30FC\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002";
+      return;
+    }
+    const note = memberNotesState.entries[memberId];
+    if (!note || !note.traits && !note.cautions) {
+      statusEl.textContent = "\u307E\u3060\u30E1\u30E2\u306F\u767B\u9332\u3055\u308C\u3066\u3044\u307E\u305B\u3093\u3002";
+      return;
+    }
+    const parts = [];
+    if (note.updatedAt) {
+      parts.push(`\u6700\u7D42\u66F4\u65B0 ${formatTimestamp(note.updatedAt)}`);
+    }
+    if (note.updatedByEmail) {
+      parts.push(`\u8A18\u5165\u8005 ${note.updatedByEmail}`);
+    }
+    statusEl.textContent = parts.join(" / ") || "";
+  }
+  function renderMemberNotesPreview(memberId) {
+    const preview = $("memberNotesPreview");
+    if (!preview)
+      return;
+    if (!memberId) {
+      preview.innerHTML = "<p class=\"muted\">\u30E1\u30F3\u30D0\u30FC\u3092\u9078\u629E\u3059\u308B\u3068\u8A18\u9332\u5185\u5BB9\u304C\u8868\u793A\u3055\u308C\u307E\u3059\u3002</p>";
+      return;
+    }
+    const member = findMemberById(memberId);
+    const note = memberNotesState.entries[memberId];
+    const displayName = member ? `${member.team ? `${member.team} / ` : ""}${member.name}` : "\u5BFE\u8C61\u30E1\u30F3\u30D0\u30FC";
+    const traits = note == null ? void 0 : note.traits;
+    const cautions = note == null ? void 0 : note.cautions;
+    const traitsMarkup = (traits == null ? void 0 : traits.trim()) ? formatMultilineText(traits) : '<span class="muted">\u672A\u8A18\u5165</span>';
+    const cautionsMarkup = (cautions == null ? void 0 : cautions.trim()) ? formatMultilineText(cautions) : '<span class="muted">\u672A\u8A18\u5165</span>';
+    preview.innerHTML = `
+    <article>
+      <h4>${escapeHTML(displayName)}</h4>
+      <div class="member-notes-preview-section">
+        <strong>\u7279\u6027</strong>
+        <p>${traitsMarkup}</p>
+      </div>
+      <div class="member-notes-preview-section">
+        <strong>\u6CE8\u610F\u3059\u3079\u304D\u70B9</strong>
+        <p>${cautionsMarkup}</p>
+      </div>
+    </article>
+  `;
+  }
+  function setMemberNotesSaving(isSaving) {
+    const btn = $("memberNotesSaveBtn");
+    if (!btn)
+      return;
+    btn.disabled = isSaving;
+    btn.textContent = isSaving ? "\u4FDD\u5B58\u4E2D..." : "\u4E0A\u66F8\u304D\u4FDD\u5B58";
+  }
+  async function handleMemberNotesSubmit(event) {
+    event.preventDefault();
+    if (!isCurrentUserAdmin()) {
+      showToast("\u7BA1\u7406\u8005\u306E\u307F\u5229\u7528\u3067\u304D\u307E\u3059\u3002", "error");
+      return;
+    }
+    if (!requireSupabaseForSync("\u30E1\u30F3\u30D0\u30FC\u7279\u6027\u30E1\u30E2")) {
+      return;
+    }
+    const select = $("memberNotesSelect");
+    const memberId = select == null ? void 0 : select.value;
+    if (!memberId) {
+      showToast("\u30E1\u30F3\u30D0\u30FC\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
+      return;
+    }
+    const traitsInput = $("memberTraitsField");
+    const cautionsInput = $("memberCautionsField");
+    const traitsValue = (traitsInput == null ? void 0 : traitsInput.value.trim()) || "";
+    const cautionsValue = (cautionsInput == null ? void 0 : cautionsInput.value.trim()) || "";
+    setMemberNotesSaving(true);
+    try {
+      await upsertMemberNotesToSupabase(memberId, { traits: traitsValue, cautions: cautionsValue });
+      showToast("\u7279\u6027\u30E1\u30E2\u3092\u4FDD\u5B58\u3057\u307E\u3057\u305F\u3002", "success");
+      memberNotesState.selectedMemberId = memberId;
+      await refreshMemberNotesFromSupabase({ silent: true });
+      fillMemberNotesFieldsFromState(memberId);
+    } catch (err) {
+      console.warn("Failed to save member notes via Supabase:", err);
+      showToast("\u7279\u6027\u30E1\u30E2\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002Supabase\u306E\u8A2D\u5B9A\u3084\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
+    } finally {
+      setMemberNotesSaving(false);
+    }
+  }
+  async function handleMemberNotesOpen() {
+    if (!isCurrentUserAdmin()) {
+      showToast("\u7BA1\u7406\u8005\u306E\u307F\u5229\u7528\u3067\u304D\u307E\u3059\u3002", "error");
+      return;
+    }
+    if (!requireSupabaseForSync("\u30E1\u30F3\u30D0\u30FC\u7279\u6027\u30E1\u30E2")) {
+      return;
+    }
+    await refreshMemberNotesFromSupabase({ silent: true });
+    openMemberNotesPanel();
+  }
   function toggleAdminButton(visible) {
     const btn = $("adminAccessBtn");
-    if (!btn) return;
+    if (!btn)
+      return;
     btn.style.display = visible ? "" : "none";
   }
   function updateAdminPanelVisibility() {
@@ -565,6 +1260,14 @@
     showToast("\u7BA1\u7406\u8005\u753B\u9762\u306B\u5165\u5BA4\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
     return false;
   }
+  function requireSupabaseForSync(featureLabel = "\u3053\u306E\u64CD\u4F5C") {
+    if (supabase) {
+      return true;
+    }
+    const label = featureLabel ? `${featureLabel}\u3092` : "\u3053\u306E\u64CD\u4F5C\u306F";
+    showToast(`Supabase\u672A\u63A5\u7D9A\u306E\u305F\u3081${label}\u5B9F\u884C\u3067\u304D\u307E\u305B\u3093\u3002URL/\u30AD\u30FC\u3068\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002`, "error");
+    return false;
+  }
   function bootstrapProtectedApp(options = {}) {
     const { forceReload = false } = options;
     if (!appData || forceReload) {
@@ -577,6 +1280,9 @@
       appBootstrapped = true;
     }
     startSliderAutoPlay();
+    if (!supabase && supabaseMonitor.initialized) {
+      updateSupabaseMonitorLocalFallback();
+    }
   }
   function renderProtectedApp() {
     if (!appData) {
@@ -614,6 +1320,14 @@
     if (sliderForm) {
       sliderForm.addEventListener("submit", handleSliderSubmit);
     }
+    const sliderSubmitBtn = $("slider-submit-btn");
+    if (sliderForm && sliderSubmitBtn && typeof sliderForm.requestSubmit === "function") {
+      sliderSubmitBtn.addEventListener("click", (event) => {
+        if (sliderSubmitBtn.disabled) return;
+        event.preventDefault();
+        sliderForm.requestSubmit(sliderSubmitBtn);
+      });
+    }
     const adminAccessBtn = $("adminAccessBtn");
     if (adminAccessBtn) {
       adminAccessBtn.addEventListener("click", () => {
@@ -648,6 +1362,32 @@
     }
     if (sliderNext) {
       sliderNext.addEventListener("click", () => shiftSlide(1));
+    }
+    const memberNotesBtn = $("memberNotesBtn");
+    if (memberNotesBtn) {
+      memberNotesBtn.addEventListener("click", () => {
+        handleMemberNotesOpen();
+      });
+    }
+    const memberNotesClose = $("memberNotesCloseBtn");
+    if (memberNotesClose) {
+      memberNotesClose.addEventListener("click", () => {
+        closeMemberNotesPanel();
+      });
+    }
+    const memberNotesCancel = $("memberNotesCancelBtn");
+    if (memberNotesCancel) {
+      memberNotesCancel.addEventListener("click", () => {
+        closeMemberNotesPanel();
+      });
+    }
+    const memberNotesForm = $("member-notes-form");
+    if (memberNotesForm) {
+      memberNotesForm.addEventListener("submit", handleMemberNotesSubmit);
+    }
+    const memberNotesSelect = $("memberNotesSelect");
+    if (memberNotesSelect) {
+      memberNotesSelect.addEventListener("change", handleMemberNotesSelectChange);
     }
     const adminNoticeList = $("admin-notice-list");
     if (adminNoticeList) {
@@ -701,6 +1441,7 @@
         showToast("\u7DE8\u96C6\u3092\u30AD\u30E3\u30F3\u30BB\u30EB\u3057\u307E\u3057\u305F\u3002", "success");
       });
     }
+    setupSupabaseMonitorUI();
   }
   function findActionButton(event, actionName) {
     const target = event.target;
@@ -1068,6 +1809,7 @@
     event.preventDefault();
     if (!ensureAdminAccess()) return;
     if (!appData) return;
+    if (!requireSupabaseForSync("\u30E1\u30F3\u30D0\u30FC\u7BA1\u7406")) return;
     ensureArrayState("members");
     const name = (_b = (_a = $("member-name")) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
     const role = (_d = (_c = $("member-role")) == null ? void 0 : _c.value) == null ? void 0 : _d.trim();
@@ -1101,7 +1843,6 @@
     const ageNumber = ageValue ? Number(ageValue) : null;
     const normalizedAge = Number.isFinite(ageNumber) ? ageNumber : null;
     const defaultPhotoAlt = `${name}\u306E\u30D7\u30ED\u30D5\u30A3\u30FC\u30EB\u5199\u771F`;
-    let photoUrl = (existingMember == null ? void 0 : existingMember.photo) || "";
     const memberPayload = {
       name,
       role,
@@ -1113,77 +1854,54 @@
       photo: (existingMember == null ? void 0 : existingMember.photo) || "",
       photoAlt: (existingMember == null ? void 0 : existingMember.photoAlt) || defaultPhotoAlt
     };
-    const submitBtn = event.submitter instanceof HTMLButtonElement ? event.submitter : null;
+    const submitBtn = resolveSubmitButton(event, "#member-submit-btn");
     if (submitBtn) {
       submitBtn.disabled = true;
-      submitBtn.textContent = "\u8FFD\u52A0\u4E2D...";
+      submitBtn.textContent = isEditing ? "\u66F4\u65B0\u4E2D..." : "\u8FFD\u52A0\u4E2D...";
     }
     try {
       if (photoFile) {
-        photoUrl = supabase ? await uploadMemberPhoto(photoFile, { memberName: name }) : await fileToDataUrl(photoFile);
-        memberPayload.photo = photoUrl;
+        memberPayload.photo = await uploadMemberPhoto(photoFile, { memberName: name });
         memberPayload.photoAlt = defaultPhotoAlt;
       }
-      if (supabase) {
-        if (isEditing) {
-          await updateMemberInSupabase(editingId, memberPayload);
-        } else {
-          await insertMemberToSupabase(memberPayload);
-        }
-        await refreshMembersFromSupabase({ silent: true });
-      } else if (isEditing) {
-        appData.members = appData.members.map(
-          (member) => member.id === editingId ? __spreadProps(__spreadValues(__spreadValues({}, member), memberPayload), { id: member.id }) : member
-        );
-        saveAppData(appData);
+      if (isEditing) {
+        await updateMemberInSupabase(editingId, memberPayload);
       } else {
-        const localMember = __spreadValues({ id: createId("member") }, memberPayload);
-        appData.members = [...appData.members, localMember];
-        saveAppData(appData);
+        await insertMemberToSupabase(memberPayload);
       }
+      await refreshMembersFromSupabase({ silent: true });
       if (isEditing) {
         exitMemberEditMode({ silent: true });
       } else {
         resetMemberFormFields();
       }
-      renderMemberTable();
-      renderAdminMembers();
       showToast(isEditing ? `${memberPayload.name} \u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3002` : `${memberPayload.name} \u3092\u8FFD\u52A0\u3057\u307E\u3057\u305F\u3002`, "success");
     } catch (err) {
-      console.warn("Failed to add member:", err);
-      showToast("\u30E1\u30F3\u30D0\u30FC\u306E\u8FFD\u52A0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+      console.warn("Failed to sync member with Supabase:", err);
+      const actionLabel = isEditing ? "\u66F4\u65B0" : "\u8FFD\u52A0";
+      const detail = (err == null ? void 0 : err.message) ? ` (${err.message})` : "";
+      showToast(`\u30E1\u30F3\u30D0\u30FC\u306E${actionLabel}\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002Supabase\u306E\u8A2D\u5B9A\u3084\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002${detail}`, "error");
     } finally {
       if (submitBtn) {
         submitBtn.disabled = false;
-        submitBtn.textContent = "\u30E1\u30F3\u30D0\u30FC\u3092\u8FFD\u52A0";
+        submitBtn.textContent = isEditing ? "\u30E1\u30F3\u30D0\u30FC\u3092\u66F4\u65B0" : "\u30E1\u30F3\u30D0\u30FC\u3092\u8FFD\u52A0";
       }
     }
   }
   async function handleMemberDelete(id) {
     if (!id || !ensureAdminAccess()) return;
+    if (!requireSupabaseForSync("\u30E1\u30F3\u30D0\u30FC\u7BA1\u7406")) return;
     ensureArrayState("members");
     try {
-      if (supabase) {
-        await deleteMemberFromSupabase(id);
-        await refreshMembersFromSupabase({ silent: true });
-      } else {
-        const before = appData.members.length;
-        appData.members = appData.members.filter((member) => member.id !== id);
-        if (before === appData.members.length) {
-          showToast("\u6307\u5B9A\u3057\u305F\u30E1\u30F3\u30D0\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002", "error");
-          return;
-        }
-        saveAppData(appData);
-      }
+      await deleteMemberFromSupabase(id);
       if (editingMemberId === id) {
         exitMemberEditMode({ silent: true });
       }
-      renderMemberTable();
-      renderAdminMembers();
+      await refreshMembersFromSupabase({ silent: true });
       showToast("\u30E1\u30F3\u30D0\u30FC\u3092\u524A\u9664\u3057\u307E\u3057\u305F\u3002", "success");
     } catch (err) {
-      console.warn("Failed to delete member:", err);
-      showToast("\u30E1\u30F3\u30D0\u30FC\u306E\u524A\u9664\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002", "error");
+      console.warn("Failed to delete member via Supabase:", err);
+      showToast("\u30E1\u30F3\u30D0\u30FC\u306E\u524A\u9664\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002Supabase\u306E\u8A2D\u5B9A\u3084\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
     }
   }
   function handleResourceSubmit(event) {
@@ -1224,64 +1942,89 @@
     renderAdminResources();
     showToast("\u53C2\u8003\u8CC7\u6599\u3092\u524A\u9664\u3057\u307E\u3057\u305F\u3002", "success");
   }
-  function handleSliderSubmit(event) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+  async function handleSliderSubmit(event) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     event.preventDefault();
     if (!ensureAdminAccess()) return;
     if (!appData) return;
+    if (!requireSupabaseForSync("\u30B9\u30E9\u30A4\u30C0\u30FC\u7BA1\u7406")) return;
     ensureArrayState("announcements");
     const title = (_b = (_a = $("slider-title")) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
     const body = (_d = (_c = $("slider-body")) == null ? void 0 : _c.value) == null ? void 0 : _d.trim();
     const tag = ((_e = $("slider-tag")) == null ? void 0 : _e.value) || "\u5171\u6709";
     const layoutInput = ((_f = $("slider-layout")) == null ? void 0 : _f.value) || "text";
-    const mediaUrlRaw = (_h = (_g = $("slider-media")) == null ? void 0 : _g.value) == null ? void 0 : _h.trim();
-    const mediaAlt = (_j = (_i = $("slider-alt")) == null ? void 0 : _i.value) == null ? void 0 : _j.trim();
-    const hasMedia = Boolean(mediaUrlRaw);
-    if ((layoutInput === "mixed" || layoutInput === "image") && !hasMedia) {
-      showToast("\u9078\u629E\u3057\u305F\u30EC\u30A4\u30A2\u30A6\u30C8\u306B\u306F\u753B\u50CFURL\u304C\u5FC5\u8981\u3067\u3059\u3002", "error");
-      return;
+    const mediaAltInput = (_h = (_g = $("slider-alt")) == null ? void 0 : _g.value) == null ? void 0 : _h.trim();
+    const mediaUrlRaw = (_j = (_i = $("slider-media")) == null ? void 0 : _i.value) == null ? void 0 : _j.trim();
+    const mediaFileInput = $("slider-media-file");
+    const mediaFile = ((_k = mediaFileInput == null ? void 0 : mediaFileInput.files) == null ? void 0 : _k[0]) || null;
+    const submitBtn = resolveSubmitButton(event, "#slider-submit-btn");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "\u8FFD\u52A0\u4E2D...";
     }
-    if (layoutInput === "text" && !title && !body) {
-      showToast("\u30C6\u30AD\u30B9\u30C8\u306E\u307F\u306E\u30EC\u30A4\u30A2\u30A6\u30C8\u3067\u306F\u30BF\u30A4\u30C8\u30EB\u307E\u305F\u306F\u672C\u6587\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
-      return;
+    try {
+      let mediaUrl = "";
+      if (mediaFile) {
+        mediaUrl = await uploadSliderMedia(mediaFile);
+      } else if (mediaUrlRaw) {
+        mediaUrl = mediaUrlRaw;
+      }
+      const hasMedia = Boolean(mediaUrl);
+      if ((layoutInput === "mixed" || layoutInput === "image") && !hasMedia) {
+        showToast("\u9078\u629E\u3057\u305F\u30EC\u30A4\u30A2\u30A6\u30C8\u306B\u306F\u753B\u50CF\u304C\u5FC5\u8981\u3067\u3059\u3002", "error");
+        return;
+      }
+      if (layoutInput === "text" && !title && !body) {
+        showToast("\u30C6\u30AD\u30B9\u30C8\u306E\u307F\u306E\u30EC\u30A4\u30A2\u30A6\u30C8\u3067\u306F\u30BF\u30A4\u30C8\u30EB\u307E\u305F\u306F\u672C\u6587\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
+        return;
+      }
+      if (!title && !body && !hasMedia) {
+        showToast("\u30BF\u30A4\u30C8\u30EB\u30FB\u672C\u6587\u30FB\u753B\u50CF\u306E\u3044\u305A\u308C\u304B\u306F\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
+        return;
+      }
+      const layout = normalizeSlideLayout(layoutInput, hasMedia);
+      const resolvedMediaAlt = hasMedia ? mediaAltInput || title || "\u95A2\u9023\u753B\u50CF" : "";
+      const slidePayload = {
+        tag,
+        title,
+        body,
+        layout,
+        mediaUrl,
+        mediaAlt: resolvedMediaAlt
+      };
+      await insertAnnouncementToSupabase(slidePayload);
+      await refreshAnnouncementsFromSupabase({ silent: true });
+      (_l = $("slider-form")) == null ? void 0 : _l.reset();
+      if (mediaFileInput) {
+        mediaFileInput.value = "";
+      }
+      const layoutField = $("slider-layout");
+      if (layoutField) layoutField.value = "text";
+      showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u306B\u65B0\u3057\u3044\u60C5\u5831\u3092\u8FFD\u52A0\u3057\u307E\u3057\u305F\u3002", "success");
+    } catch (err) {
+      console.warn("Failed to add slider entry via Supabase:", err);
+      const detail = (err == null ? void 0 : err.message) ? ` (${err.message})` : "";
+      showToast(`\u30B9\u30E9\u30A4\u30C0\u30FC\u306E\u8FFD\u52A0\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002Supabase\u306E\u8A2D\u5B9A\u3084\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002${detail}`, "error");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "\u30B9\u30E9\u30A4\u30C9\u3092\u8FFD\u52A0";
+      }
     }
-    if (!title && !body && !hasMedia) {
-      showToast("\u30BF\u30A4\u30C8\u30EB\u30FB\u672C\u6587\u30FB\u753B\u50CF\u306E\u3044\u305A\u308C\u304B\u306F\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
-      return;
-    }
-    const mediaUrl = hasMedia ? mediaUrlRaw : "";
-    const layout = normalizeSlideLayout(layoutInput, hasMedia);
-    const newSlide = {
-      id: createId("ann"),
-      tag,
-      title,
-      body,
-      layout,
-      mediaUrl,
-      mediaAlt: mediaAlt || ""
-    };
-    appData.announcements = [newSlide, ...appData.announcements];
-    saveAppData(appData);
-    (_k = $("slider-form")) == null ? void 0 : _k.reset();
-    const layoutField = $("slider-layout");
-    if (layoutField) layoutField.value = "text";
-    renderAnnouncements();
-    renderSliderAdminList();
-    startSliderAutoPlay();
-    showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u306B\u65B0\u3057\u3044\u60C5\u5831\u3092\u8FFD\u52A0\u3057\u307E\u3057\u305F\u3002", "success");
   }
-  function handleSliderDelete(id) {
+  async function handleSliderDelete(id) {
     if (!appData || !id) return;
     if (!ensureAdminAccess()) return;
+    if (!requireSupabaseForSync("\u30B9\u30E9\u30A4\u30C0\u30FC\u7BA1\u7406")) return;
     ensureArrayState("announcements");
-    const before = appData.announcements.length;
-    appData.announcements = appData.announcements.filter((slide) => slide.id !== id);
-    if (before === appData.announcements.length) return;
-    saveAppData(appData);
-    renderAnnouncements();
-    renderSliderAdminList();
-    startSliderAutoPlay();
-    showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u304B\u3089\u524A\u9664\u3057\u307E\u3057\u305F\u3002", "success");
+    try {
+      await deleteAnnouncementFromSupabase(id);
+      await refreshAnnouncementsFromSupabase({ silent: true });
+      showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u304B\u3089\u524A\u9664\u3057\u307E\u3057\u305F\u3002", "success");
+    } catch (err) {
+      console.warn("Failed to delete slider entry via Supabase:", err);
+      showToast("\u30B9\u30E9\u30A4\u30C0\u30FC\u306E\u524A\u9664\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002Supabase\u306E\u8A2D\u5B9A\u3084\u6A29\u9650\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002", "error");
+    }
   }
   function handleQaSubmit(event) {
     var _a, _b, _c, _d, _e, _f;
@@ -1352,6 +2095,29 @@
       toast.textContent = "";
     }, 3200);
   }
+  function updateSliderFormStatus(message, type = "info", options = {}) {
+    const statusEl = $("slider-form-status");
+    if (!statusEl) return;
+    if (sliderStatusTimer) {
+      clearTimeout(sliderStatusTimer);
+      sliderStatusTimer = null;
+    }
+    if (!message) {
+      statusEl.textContent = "";
+      statusEl.style.display = "none";
+      statusEl.className = "form-status muted";
+      return;
+    }
+    const variantClass = type === "error" ? "form-status error" : type === "success" ? "form-status success" : "form-status muted";
+    statusEl.className = variantClass;
+    statusEl.textContent = message;
+    statusEl.style.display = "";
+    if (options.autoHide) {
+      sliderStatusTimer = setTimeout(() => {
+        updateSliderFormStatus("");
+      }, options.autoHide);
+    }
+  }
   function translatePasswordUpdateError(message) {
     const raw = message || "";
     const lower = raw.toLowerCase();
@@ -1391,7 +2157,10 @@
     const overlay = $("auth-overlay");
     const logoutBtn = $("logoutBtn");
     toggleAdminButton(false);
+    toggleMemberNotesButton(false);
     setAdminAccess(false);
+    closeMemberNotesPanel();
+    resetMemberNotesState();
     stopSliderAutoPlay();
     if (authView) authView.style.display = "";
     if (authCard) authCard.style.display = "none";
@@ -1414,7 +2183,10 @@
     const overlay = $("auth-overlay");
     const logoutBtn = $("logoutBtn");
     toggleAdminButton(false);
+    toggleMemberNotesButton(false);
     setAdminAccess(false);
+    closeMemberNotesPanel();
+    resetMemberNotesState();
     if (authView) authView.style.display = "";
     if (authCard) authCard.style.display = "";
     if (signupCard) signupCard.style.display = "none";
@@ -1436,7 +2208,10 @@
     const overlay = $("auth-overlay");
     const logoutBtn = $("logoutBtn");
     toggleAdminButton(false);
+    toggleMemberNotesButton(false);
     setAdminAccess(false);
+    closeMemberNotesPanel();
+    resetMemberNotesState();
     stopSliderAutoPlay();
     if (authView) authView.style.display = "";
     if (authCard) authCard.style.display = "none";
@@ -1453,7 +2228,10 @@
   function showPending(message) {
     const overlay = $("auth-overlay");
     toggleAdminButton(false);
+    toggleMemberNotesButton(false);
     setAdminAccess(false);
+    closeMemberNotesPanel();
+    resetMemberNotesState();
     if (overlay) {
       overlay.style.display = "flex";
     }
@@ -1476,10 +2254,21 @@
     if (appHome) appHome.style.display = "";
     if (logoutBtn) logoutBtn.style.display = "";
     toggleAdminButton(true);
+    const adminUser = isCurrentUserAdmin();
+    toggleMemberNotesButton(adminUser);
+    if (adminUser) {
+      refreshMemberNotesFromSupabase({ silent: true });
+    } else {
+      resetMemberNotesState();
+    }
     updateAdminPanelVisibility();
     bootstrapProtectedApp();
     if (supabase) {
       refreshMembersFromSupabase({ silent: true });
+      refreshAnnouncementsFromSupabase({ silent: true });
+    }
+    if (supabaseMonitor.initialized) {
+      refreshSupabaseMonitor({ includeStorage: supabaseMonitor.storageVisible, silent: true });
     }
   }
   function startApprovalPolling(userId) {
@@ -1523,27 +2312,46 @@
     }, 3e3);
   }
   async function updateAuthUI(session) {
+    var _a;
+    currentSession = session || null;
     if (!supabase) {
+      currentUserProfile = null;
       showLogin();
       return;
     }
     if (!session) {
+      currentUserProfile = null;
       showLogin();
       return;
     }
     try {
-      const { data: profile, error } = await supabase.from("profiles").select("approved").eq("id", session.user.id).maybeSingle();
+      const sessionEmail = ((_a = session == null ? void 0 : session.user) == null ? void 0 : _a.email) || "";
+      const { data: profile, error } = await supabase.from("profiles").select("approved, is_admin").eq("id", session.user.id).maybeSingle();
       if (error) {
+        currentUserProfile = null;
         showPending("\u627F\u8A8D\u72B6\u614B\u306E\u78BA\u8A8D\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002\u3057\u3070\u3089\u304F\u3057\u3066\u304B\u3089\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002");
         return;
       }
-      if (!profile || !profile.approved) {
+      const approved = Boolean(profile == null ? void 0 : profile.approved);
+      const isAdminProfile = Boolean(profile == null ? void 0 : profile.is_admin);
+      currentUserProfile = {
+        id: session.user.id,
+        email: sessionEmail,
+        approved,
+        isAdmin: isAdminProfile
+      };
+      if (!profile || !approved) {
+        if (isAdminProfile) {
+          showMain();
+          return;
+        }
         showPending("\u627F\u8A8D\u5F85\u3061\u3067\u3059\u3002\u627F\u8A8D\u3055\u308C\u6B21\u7B2C\u3001\u81EA\u52D5\u3067\u5229\u7528\u53EF\u80FD\u306B\u306A\u308A\u307E\u3059\u3002");
         startApprovalPolling(session.user.id);
         return;
       }
       showMain();
     } catch (e) {
+      currentUserProfile = null;
       showPending("\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F\u3002\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044\u3002");
     }
   }
@@ -1590,6 +2398,13 @@
           }
           if (msg) {
             msg.textContent = "\u30ED\u30B0\u30A4\u30F3\u3057\u307E\u3057\u305F\u3002\u627F\u8A8D\u72B6\u614B\u3092\u78BA\u8A8D\u3057\u3066\u3044\u307E\u3059...";
+          }
+          try {
+            const session = ((data == null ? void 0 : data.session) || (await supabase.auth.getSession()).data.session) ?? null;
+            if (session) {
+              await updateAuthUI(session);
+            }
+          } catch (__) {
           }
         } catch (err) {
           if (msg) {
