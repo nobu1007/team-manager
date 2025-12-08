@@ -60,6 +60,7 @@
     </div>
     <nav class="app-nav">
       <a href="#" aria-current="page">Home</a>
+      <button id="memberNotesBtn" class="primary" style="display:none">特性メモ編集</button>
       <button id="adminAccessBtn" class="secondary" style="display:none">管理者画面</button>
       <button id="logoutBtn" class="secondary" style="display:none">ログアウト</button>
     </nav>
@@ -261,6 +262,7 @@
             <div class="actions" style="justify-content:flex-start">
               <button type="submit" id="slider-submit-btn">スライドを追加</button>
             </div>
+            <p id="slider-form-status" class="form-status muted" role="status" aria-live="polite" style="display:none"></p>
           </form>
           <h4 class="subheading">現在の表示内容</h4>
           <ul class="list slider-admin-list" id="slider-admin-list"></ul>
@@ -420,6 +422,38 @@
           <button type="button" class="secondary" id="adminModalClose">キャンセル</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="member-notes-panel" class="member-notes-panel" role="dialog" aria-modal="true" hidden>
+    <div class="card member-notes-card">
+      <div class="member-notes-head">
+        <div>
+          <p class="eyebrow">管理者限定</p>
+          <h3>メンバー特性メモ</h3>
+        </div>
+        <button type="button" class="icon-button" id="memberNotesCloseBtn" aria-label="特性メモを閉じる">×</button>
+      </div>
+      <div class="member-notes-body">
+        <form id="member-notes-form" class="member-notes-form" aria-label="メンバー特性メモ編集">
+          <label for="memberNotesSelect">対象メンバー</label>
+          <select id="memberNotesSelect" required>
+            <option value="">読み込み中...</option>
+          </select>
+          <label for="memberTraitsField">特性 / 得意分野</label>
+          <textarea id="memberTraitsField" placeholder="例: 判断が早くチームの士気を高める"></textarea>
+          <label for="memberCautionsField">注意すべき点</label>
+          <textarea id="memberCautionsField" placeholder="例: 長時間の索敵では疲労が出やすいので休憩を入れる"></textarea>
+          <div class="actions" style="justify-content:flex-start">
+            <button type="submit" id="memberNotesSaveBtn">上書き保存</button>
+            <button type="button" class="secondary" id="memberNotesCancelBtn">キャンセル</button>
+          </div>
+          <p id="memberNotesStatus" class="muted small-text" aria-live="polite"></p>
+        </form>
+        <section id="memberNotesPreview" class="member-notes-preview" aria-live="polite">
+          <p class="muted">メンバーを選択すると記録内容が表示されます。</p>
+        </section>
+      </div>
     </div>
   </div>
 
