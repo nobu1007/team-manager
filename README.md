@@ -27,8 +27,8 @@
    - Supabase コンソールで新規プロジェクトを作成し、Region/Password を設定。
 
 2) テーブルを作成  
-   - コンソールの SQL Editor で `supabase/schema.sql` の内容を実行します（コピペ）。
-   - これで `teams / members / roles / member_roles` が作成されます。
+   - コンソールの SQL Editor で `supabase_setup.sql`（メンバー表＋写真/スライダー用バケット＋RLS）や `profiles_setup.sql`（承認ユーザー管理）を順に実行します。
+   - これで `members` テーブルに加えて `member-photos` / `slider-media` バケットが作成され、顔写真やスライダー画像をアップロードできるようになります。
    - まずは RLS 無効（デフォルト）で PoC 動作を確認し、後から RLS を設計するのが簡単です。
 
 3) API キーと URL を設定  
@@ -50,8 +50,8 @@
 
 ### 実装メモ
 
-- `app.js` は Supabase が設定されていれば Supabase を利用し、未設定なら localStorage を使うフォールバック構成です。
-- Supabase 利用時は、`teams / members / roles / member_roles` を読み込み、フロント側で結合して表示します。
+- `app.js` は Supabase が設定されていれば `members` テーブルを自動で利用し、未設定ならローカルストレージにフォールバックします。
+- `member-profile.html` も Supabase 経由でメンバー情報を取得し、顔写真・年齢・所属・意気込みを共有表示します。
 
 
 

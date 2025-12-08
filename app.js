@@ -2803,5 +2803,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 });
+<<<<<<< HEAD
 
+=======
+>>>>>>> fd5f39d (Fix login flow on Vercel)
 

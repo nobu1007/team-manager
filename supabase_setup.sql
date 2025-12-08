@@ -1,0 +1,175 @@
+-- Supabase 全体セットアップスクリプト
+-- 1. SQL Editor でこのファイルを実行してください
+-- 2. 既に同名のテーブル/バケットがある場合は上書きされます（必要に応じてバックアップを取ってください）
+
+create extension if not exists "pgcrypto";
+
+-- メンバーテーブル
+drop table if exists public.members cascade;
+create table public.members (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  role text,
+  team text,
+  contact text,
+  age integer,
+  affiliation text,
+  motivation text,
+  photo text,
+  photo_alt text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public.set_members_updated_at()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists members_set_updated_at on public.members;
+create trigger members_set_updated_at
+before update on public.members
+for each row execute procedure public.set_members_updated_at();
+
+alter table public.members enable row level security;
+
+drop policy if exists "Approved users can read members" on public.members;
+create policy "Approved users can read members"
+  on public.members for select
+  using (exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.approved = true
+  ));
+
+drop policy if exists "Admins manage members" on public.members;
+create policy "Admins manage members"
+  on public.members for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- メンバー特性メモ（管理者専用）
+drop table if exists public.member_insights cascade;
+create table public.member_insights (
+  id uuid primary key default gen_random_uuid(),
+  member_id uuid not null references public.members(id) on delete cascade,
+  traits text,
+  cautions text,
+  updated_by uuid references auth.users(id),
+  updated_by_email text,
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists member_insights_member_id_idx
+  on public.member_insights (member_id);
+
+create or replace function public.set_member_insights_updated_at()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists member_insights_set_updated_at on public.member_insights;
+create trigger member_insights_set_updated_at
+before update on public.member_insights
+for each row execute procedure public.set_member_insights_updated_at();
+
+alter table public.member_insights enable row level security;
+
+drop policy if exists "Admins read member insights" on public.member_insights;
+create policy "Admins read member insights"
+  on public.member_insights for select
+  using (public.is_admin());
+
+drop policy if exists "Admins write member insights" on public.member_insights;
+create policy "Admins write member insights"
+  on public.member_insights for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- スライダー（お知らせ）テーブル
+drop table if exists public.announcements cascade;
+create table public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  tag text not null default '共有',
+  title text,
+  body text,
+  layout text not null default 'text',
+  media_url text,
+  media_alt text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public.set_announcements_updated_at()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists announcements_set_updated_at on public.announcements;
+create trigger announcements_set_updated_at
+before update on public.announcements
+for each row execute procedure public.set_announcements_updated_at();
+
+alter table public.announcements enable row level security;
+
+drop policy if exists "Approved users can read announcements" on public.announcements;
+create policy "Approved users can read announcements"
+  on public.announcements for select
+  using (exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid()
+      and p.approved = true
+  ));
+
+drop policy if exists "Admins manage announcements" on public.announcements;
+create policy "Admins manage announcements"
+  on public.announcements for all
+  using (public.is_admin())
+  with check (public.is_admin());
+
+-- ストレージ: 顔写真バケット
+insert into storage.buckets (id, name, public)
+values ('member-photos', 'member-photos', true)
+on conflict (id) do update
+  set name = excluded.name,
+      public = excluded.public;
+
+drop policy if exists "Allow read member photos" on storage.objects;
+create policy "Allow read member photos"
+  on storage.objects for select
+  using (bucket_id = 'member-photos');
+
+drop policy if exists "Admins manage member photos" on storage.objects;
+create policy "Admins manage member photos"
+  on storage.objects for all
+  using (bucket_id = 'member-photos' and public.is_admin())
+  with check (bucket_id = 'member-photos' and public.is_admin());
+
+-- ストレージ: スライダー画像バケット
+insert into storage.buckets (id, name, public)
+values ('slider-media', 'slider-media', true)
+on conflict (id) do update
+  set name = excluded.name,
+      public = excluded.public;
+
+drop policy if exists "Allow read slider media" on storage.objects;
+create policy "Allow read slider media"
+  on storage.objects for select
+  using (bucket_id = 'slider-media');
+
+drop policy if exists "Admins manage slider media" on storage.objects;
+create policy "Admins manage slider media"
+  on storage.objects for all
+  using (bucket_id = 'slider-media' and public.is_admin())
+  with check (bucket_id = 'slider-media' and public.is_admin());
+
+
