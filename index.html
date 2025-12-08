@@ -265,6 +265,40 @@
           <h4 class="subheading">現在の表示内容</h4>
           <ul class="list slider-admin-list" id="slider-admin-list"></ul>
         </article>
+
+        <article class="card supabase-monitor-card" aria-label="Supabase管理">
+          <h3>Supabase管理</h3>
+          <p class="muted" id="supabase-connection-status">Supabaseの初期化を待機しています...</p>
+          <div class="supabase-stats">
+            <div class="supabase-stat">
+              <span class="label">メンバー件数</span>
+              <strong id="supabase-member-count">―</strong>
+            </div>
+            <div class="supabase-stat">
+              <span class="label">Storageファイル</span>
+              <strong id="supabase-storage-count">―</strong>
+            </div>
+            <div class="supabase-stat">
+              <span class="label">最終同期</span>
+              <strong id="supabase-last-sync">未同期</strong>
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" id="supabase-refresh-btn">データ同期</button>
+            <button type="button" class="secondary" id="supabase-storage-refresh-btn">Storageを表示</button>
+          </div>
+          <p class="muted supabase-note">
+            プロジェクトURL: <code id="supabase-project-url">未設定</code>
+          </p>
+          <div id="supabase-storage-section" class="supabase-storage" style="display:none" aria-live="polite">
+            <div class="supabase-storage-head">
+              <h4 class="subheading">Storageの最新ファイル</h4>
+              <p class="muted small-text">member-photos / slider-media</p>
+            </div>
+            <p class="empty" id="supabase-storage-empty">表示可能なファイルがありません。</p>
+            <ul id="supabase-storage-list" class="supabase-storage-list"></ul>
+          </div>
+        </article>
       </div>
     </section>
 
